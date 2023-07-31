@@ -43,7 +43,7 @@ python examples/multimedia/mmimdb_deq.py
 
 The code is modified from the [official implementation of Cross-Modal BERT](https://github.com/thuiar/Cross-Modal-BERT).
 
-First download the pre-trained BERT model from [pre-trained BERT model](https://drive.google.com/file/d/1dKSzsgXORN7WVaJJYvNzqFPCQbn-aJcb/view?usp=sharing), or from [Baidu Netdisk](https://pan.baidu.com/s/1G3VaV0kqwYkOEFNst2rfVw) with code `fuse`, or use the following command:
+First download the pre-trained BERT model from [Google Drive](https://drive.google.com/file/d/1dKSzsgXORN7WVaJJYvNzqFPCQbn-aJcb/view?usp=sharing), or from [Baidu Netdisk](https://pan.baidu.com/s/1G3VaV0kqwYkOEFNst2rfVw) with code `fuse`, or use the following command:
 
 ```bash
 wget https://storage.googleapis.com/bert_models/2018_10_18/uncased_L-12_H-768_A-12.zip
