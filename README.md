@@ -1,5 +1,5 @@
 # Deep Equilibrium Multimodal Fusion
-PyTorch implementation of the paper: Deep Equilibrium Multimodal Fusion
+PyTorch implementation of the paper: Deep Equilibrium Multimodal Fusion [[arXiV](https://arxiv.org/pdf/2306.16645.pdf)].
 
 ## Installation
 
