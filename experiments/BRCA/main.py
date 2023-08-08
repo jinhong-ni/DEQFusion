@@ -29,25 +29,28 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
     data_folder = 'BRCA'
-    testonly = False
+    testonly = args.mode == 'test'
     modelpath = './model/'
     accs = []
     mf1s = []
     wf1s = []
     traces = []
-    for _ in range(10):
-        args.mode = 'train'
-        _, acc, wf1, mf1 = train(data_folder, modelpath, args)
-        accs.append(acc)
-        wf1s.append(wf1)
-        mf1s.append(mf1)
-        print(acc, wf1, mf1)
-        args.mode = 'test'
+    if testonly:
         trace = train(data_folder, modelpath, args)
-#         print(len(trace))
-        traces.append(trace)
-#     np.save(f'trace_deq.npy', traces)
-    np.save(f'trace_fuse_only.npy', traces)  # change this name accordingly for convergence plot
-    print("Accuracy", accs)
-    print("Weighted F1", wf1s)
-    print("Macro F1", mf1s)
+    else:
+        for _ in range(1):
+            args.mode = 'train'
+            _, acc, wf1, mf1 = train(data_folder, modelpath, args)
+            accs.append(acc)
+            wf1s.append(wf1)
+            mf1s.append(mf1)
+            print(acc, wf1, mf1)
+            args.mode = 'test'
+            trace = train(data_folder, modelpath, args)
+    #         print(len(trace))
+            traces.append(trace)
+    #     np.save(f'trace_deq.npy', traces)
+        np.save(f'trace_fuse_only.npy', traces)  # change this name accordingly for convergence plot
+        print("Accuracy", accs)
+        print("Weighted F1", wf1s)
+        print("Macro F1", mf1s)

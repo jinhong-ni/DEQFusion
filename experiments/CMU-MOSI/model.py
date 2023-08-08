@@ -503,6 +503,33 @@ class SmallBlock(nn.Module):
         out = self.relu2(self.conv2(self.gn2(out)))
         return out
 
+class DEQFusionBlock(nn.Module):
+    def __init__(self, num_out_dims, deq_expand=2, num_groups=1, dropout=0.2, wnorm=False):
+        """
+        Purified-then-combined fusion block.
+        """
+        super(DEQFusionBlock, self).__init__()
+
+        self.out_dim = num_out_dims[-1]
+        
+        self.gate = torch.nn.Conv1d(num_out_dims[0], self.out_dim, 1)
+        self.fuse = torch.nn.Conv1d(self.out_dim, self.out_dim, 1)
+        
+        self.dropout1 = nn.Dropout(p=dropout)
+        self.dropout2 = nn.Dropout(p=dropout)
+            
+        self.gn3 = nn.GroupNorm(1, self.out_dim, affine=True)
+            
+    def forward(self, x, injection_features, residual_feature):
+        extracted_feats = []
+        for i, inj_feat in enumerate(injection_features):
+            extracted_feats.append(torch.mul(x, self.dropout1(self.gate(inj_feat + x))))
+        
+        out = self.dropout2(self.fuse(torch.stack(extracted_feats, dim=0).sum(dim=0))) + residual_feature
+        out = self.gn3(F.relu(out))
+        
+        return out
+
 class EQFusionBlockV2(nn.Module):
     def __init__(self, num_out_dims, deq_expand=2, num_groups=1, dropout=0.0, wnorm=False):
         """
@@ -603,7 +630,8 @@ class DEQEQFusionModule(nn.Module):
 
         self.num_branches = 3
         self.block = SmallBlock
-        self.fusion_block = EQFusionBlock
+        # self.fusion_block = EQFusionBlock
+        self.fusion_block = DEQFusionBlock
 #         self.block = SmallBlockV2
 #         self.fusion_block = EQFusionBlockV2
         self.branches = self._make_branches(self.num_branches, num_out_dims)
@@ -631,7 +659,7 @@ class DEQEQFusionModule(nn.Module):
             out = self.branches[i](x[i], inject_features[i])
             x_block_out.append(out)
 #         inject_fusion_feature = x_block_out[0] + x_block_out[1]
-        x_block_out.append(self.branches[self.num_branches - 1](x[self.num_branches - 1], x_block_out[0], x_block_out[1], injection[-1]))
+        x_block_out.append(self.branches[self.num_branches - 1](x[self.num_branches - 1], x_block_out, injection[-1]))
         return x_block_out
     
 class DEQFusionModule(nn.Module):

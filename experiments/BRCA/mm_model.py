@@ -91,6 +91,8 @@ class DEQFusionBlock(nn.Module):
     def forward(self, x, injection_features, residual_feature):
         extracted_feats = []
         for i, inj_feat in enumerate(injection_features):
+            # if not self.training:
+            #     print(i, self.gate(inj_feat + x).abs().mean().item(), self.gate(inj_feat + x).abs().min().item(), self.gate(inj_feat + x).abs().max().item())
             extracted_feats.append(torch.mul(x, self.dropout1(self.gate(inj_feat + x))))
         
         out = self.dropout2(self.fuse(torch.stack(extracted_feats, dim=0).sum(dim=0))) + residual_feature

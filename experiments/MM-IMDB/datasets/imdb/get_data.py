@@ -14,13 +14,132 @@ import sys
 from typing import *
 import numpy as np
 
+from pytorch_pretrained_bert import BertTokenizer
+import torch
+import torchvision.transforms as transforms
+from collections import Counter
+import glob
+
 sys.path.append('/home/pliang/multibench/MultiBench/datasets/imdb')
+Image.MAX_IMAGE_PIXELS = None
+
+
+class IMDBRawDataset(Dataset):
+    def __init__(self, dataset_dir: str, split: str, use_bert=False, bert_type="bert-base-uncased", max_seq_length=512, labels=None) -> None:
+        """Initialize IMDBDataset object.
+
+        Args:
+            file (h5py.File): h5py file of data
+            start_ind (int): Starting index for dataset
+            end_ind (int): Ending index for dataset
+            vggfeature (bool, optional): Whether to return pre-processed vgg_features or not. Defaults to False.
+        """
+        self.dataset_dir = dataset_dir
+        assert split in ['train', 'dev', 'test']
+        with open(os.path.join(self.dataset_dir, 'split.json'), 'r') as fp:
+            self.data_list = json.load(fp)[split]
+        self.size = len(self.data_list)
+        self.use_bert = use_bert
+        if split == 'train':
+            self.labels, self.label_freqs = self.get_labels(self.dataset_dir) if labels is None else labels
+            print(self.labels)
+            print(self.label_freqs)
+        else:
+            self.labels = self.get_labels(self.dataset_dir)[0] if labels is None else labels
+        self.n_classes = len(self.labels)
+        if use_bert:
+            assert bert_type in ['bert-base-uncased', 'bert-large-uncased']
+            self.tokenizer = BertTokenizer.from_pretrained(bert_type, do_lower_case=True)
+            self.text_start_token = "[CLS]"
+            self.max_seq_length = max_seq_length
+        
+        self.transform = transforms.Compose(
+            [
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406],
+                    std=[0.229, 0.224, 0.225],
+                ),
+            ]
+        )
+        # self.transform = transforms.Compose(
+        #     [
+        #         transforms.Resize(256),
+        #         transforms.CenterCrop(224),
+        #         transforms.ToTensor(),
+        #         transforms.Normalize(
+        #             mean=[0.46777044, 0.44531429, 0.40661017],
+        #             std=[0.12221994, 0.12145835, 0.14380469],
+        #         ),
+        #     ]
+        # )
+    
+    def get_labels(self, dataset_dir):
+        label_freqs = Counter()
+        # data_labels = [json.loads(line)["label"] for line in open(path)]
+        # data_files = glob.glob(os.path.join(dataset_dir, 'dataset', '*.json'))
+        for i, path in enumerate(self.data_list):
+            print(f'\rProcessing labels {i+1} / {len(self.data_list)}            ', end='')
+            with open(os.path.join(self.dataset_dir, 'dataset', f'{path}.json'), 'r') as fp:
+                data_labels = json.load(fp)['genres']
+            if type(data_labels[0]) == list:
+                for label_row in data_labels:
+                    label_freqs.update(label_row)
+            else:
+                label_freqs.update(data_labels)
+        print('')
+
+        return list(label_freqs.keys())[:23], label_freqs
+
+    def __getitem__(self, ind):
+        """Get item from dataset.
+
+        Args:
+            ind (int): Index of data to get
+
+        Returns:
+            tuple: Tuple of text input, image input, and label
+        """
+        data_idx = self.data_list[ind]
+        with open(os.path.join(self.dataset_dir, 'dataset', f'{data_idx}.json'), 'r') as fp:
+            metadata = json.load(fp)
+        image = Image.open(os.path.join(self.dataset_dir, 'dataset', f'{data_idx}.jpeg')).convert('RGB')
+
+        if self.transform is not None:
+            image = self.transform(image)
+        
+        plot_id = np.array([len(p) for p in metadata['plot']]).argmax()
+        text = metadata['plot'][plot_id]
+        label = torch.zeros(self.n_classes)
+        label[[self.labels.index(tgt) for tgt in metadata['genres'] if tgt not in ['News', 'Adult', 'Talk-Show', 'Reality-TV']]] = 1
+
+        if self.use_bert:
+            # txt = ' '.join([self.metadata['ix_to_word'][ix] for ix in seq])
+            tokens = self.tokenizer.tokenize(text)
+            tokens = [self.text_start_token] + tokens + ["[SEP]"]
+            if len(tokens) > self.max_seq_length:
+                tokens = tokens[0:self.max_seq_length]
+            input_ids = self.tokenizer.convert_tokens_to_ids(tokens)
+            input_mask = [1] * len(input_ids)
+            while len(input_ids) < self.max_seq_length:
+                input_ids.append(0)
+                input_mask.append(0)
+            return torch.LongTensor(input_ids), torch.LongTensor(input_mask), image, label
+
+        return text, image, label
+
+    def __len__(self):
+        """Get length of dataset."""
+        return self.size
 
 
 class IMDBDataset(Dataset):
     """Implements a torch Dataset class for the imdb dataset."""
     
-    def __init__(self, file: h5py.File, start_ind: int, end_ind: int, vggfeature: bool = False) -> None:
+    def __init__(self, file: h5py.File, start_ind: int, end_ind: int, vggfeature: bool = False, metadata: str = None, 
+                 use_bert=False, bert_type="bert-base-uncased", max_seq_length=512) -> None:
         """Initialize IMDBDataset object.
 
         Args:
@@ -33,6 +152,38 @@ class IMDBDataset(Dataset):
         self.start_ind = start_ind
         self.size = end_ind-start_ind
         self.vggfeature = vggfeature
+        self.metadata = np.load(metadata, allow_pickle=True).item() if metadata is not None else None
+        self.use_bert = use_bert
+        if use_bert:
+            assert bert_type in ['bert-base-uncased', 'bert-large-uncased']
+            self.tokenizer = BertTokenizer.from_pretrained(bert_type, do_lower_case=True)
+            self.text_start_token = "[CLS]"
+            self.max_seq_length = max_seq_length
+        if not vggfeature:
+            self.transform = transforms.Compose(
+                [
+                    transforms.Resize(256),
+                    transforms.CenterCrop(224),
+                    transforms.ToTensor(),
+                    transforms.Normalize(
+                        mean=[0.485, 0.456, 0.406],
+                        std=[0.229, 0.224, 0.225],
+                    ),
+                ]
+            )
+            # self.transform = transforms.Compose(
+            #     [
+            #         transforms.Resize(256),
+            #         transforms.CenterCrop(224),
+            #         transforms.ToTensor(),
+            #         transforms.Normalize(
+            #             mean=[0.46777044, 0.44531429, 0.40661017],
+            #             std=[0.12221994, 0.12145835, 0.14380469],
+            #         ),
+            #     ]
+            # )
+        else:
+            self.transform = None
 
     def __getitem__(self, ind):
         """Get item from dataset.
@@ -49,6 +200,30 @@ class IMDBDataset(Dataset):
         image = self.dataset["images"][ind+self.start_ind] if not self.vggfeature else \
             self.dataset["vgg_features"][ind+self.start_ind]
         label = self.dataset["genres"][ind+self.start_ind]
+
+        if self.transform is not None:
+            def inv_transform(x):
+                x[0] += 103.939
+                x[1] += 116.779
+                x[2] += 123.68
+                return x
+            image = inv_transform(image.astype(float))
+            image = Image.fromarray(image.astype(np.uint8).transpose(1, 2, 0)).convert('RGB')
+            image = self.transform(image)
+
+        if self.metadata is not None and self.use_bert:
+            seq = self.dataset["sequences"][ind+self.start_ind]
+            txt = ' '.join([self.metadata['ix_to_word'][ix] for ix in seq])
+            tokens = self.tokenizer.tokenize(txt)
+            tokens = [self.text_start_token] + tokens + ["[SEP]"]
+            if len(tokens) > self.max_seq_length:
+                tokens = tokens[0:self.max_seq_length]
+            input_ids = self.tokenizer.convert_tokens_to_ids(tokens)
+            input_mask = [1] * len(input_ids)
+            while len(input_ids) < self.max_seq_length:
+                input_ids.append(0)
+                input_mask.append(0)
+            return torch.LongTensor(input_ids), torch.LongTensor(input_mask), image, label
 
         return text, image, label
 
@@ -110,7 +285,8 @@ def _process_data(filename, path):
     return data
 
 
-def get_dataloader(path: str, test_path: str, num_workers: int = 8, train_shuffle: bool = True, batch_size: int = 40, vgg: bool = False, skip_process=False, no_robust=True) -> Tuple[Dict]:
+def get_dataloader(path: str, test_path: str, num_workers: int = 8, train_shuffle: bool = True, batch_size: int = 40, 
+                   vgg: bool = False, skip_process=False, no_robust=True, metadata=None, use_bert=False, use_raw=False) -> Tuple[Dict]:
     """Get dataloaders for IMDB dataset.
 
     Args:
@@ -126,14 +302,25 @@ def get_dataloader(path: str, test_path: str, num_workers: int = 8, train_shuffl
     Returns:
         Tuple[Dict]: Tuple of Training dataloader, Validation dataloader, Test Dataloader
     """
-    train_dataloader = DataLoader(IMDBDataset(path, 0, 15552, vgg),
-                                  shuffle=train_shuffle, num_workers=num_workers, batch_size=batch_size)
-    val_dataloader = DataLoader(IMDBDataset(path, 15552, 18160, vgg),
-                                shuffle=False, num_workers=num_workers, batch_size=batch_size)
-    if no_robust:
-        test_dataloader = DataLoader(IMDBDataset(path, 18160, 25959, vgg),
-                                     shuffle=False, num_workers=num_workers, batch_size=batch_size)
-        return train_dataloader, val_dataloader, test_dataloader
+    if not use_raw:
+        train_dataloader = DataLoader(IMDBDataset(path, 0, 15552, vgg, metadata, use_bert),
+                                    shuffle=train_shuffle, num_workers=num_workers, batch_size=batch_size)
+        val_dataloader = DataLoader(IMDBDataset(path, 15552, 18160, vgg, metadata, use_bert),
+                                    shuffle=False, num_workers=num_workers, batch_size=batch_size)
+        if no_robust:
+            test_dataloader = DataLoader(IMDBDataset(path, 18160, 25959, vgg, metadata, use_bert),
+                                        shuffle=False, num_workers=num_workers, batch_size=batch_size)
+            return train_dataloader, val_dataloader, test_dataloader
+    else:
+        train_dataset = IMDBRawDataset(path, 'train', use_bert=use_bert)
+        train_dataloader = DataLoader(train_dataset,
+                                    shuffle=train_shuffle, num_workers=num_workers, batch_size=batch_size)
+        val_dataloader = DataLoader(IMDBRawDataset(path, 'dev', use_bert=use_bert, labels=train_dataset.labels),
+                                    shuffle=False, num_workers=num_workers, batch_size=batch_size)
+        if no_robust:
+            test_dataloader = DataLoader(IMDBRawDataset(path, 'test', use_bert=use_bert, labels=train_dataset.labels),
+                                        shuffle=False, num_workers=num_workers, batch_size=batch_size)
+            return train_dataloader, val_dataloader, test_dataloader
 
 #     test_dataset = h5py.File(path, 'r')
 #     test_text = test_dataset['features'][18160:25959]

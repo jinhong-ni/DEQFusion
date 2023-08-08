@@ -60,8 +60,33 @@ class SimpleResidualBlock(nn.Module):
         return out
 
 
+# class DEQFusionBlock(nn.Module):
+#     def __init__(self, num_out_dims, deq_expand=2, num_groups=1, dropout=0.0, wnorm=False):
+#         """
+#         Purified-then-combined fusion block.
+#         """
+#         super(DEQFusionBlock, self).__init__()
+
+#         self.out_dim = num_out_dims[-1]
+        
+#         self.gate = nn.Linear(num_out_dims[0], self.out_dim)
+#         self.fuse = nn.Linear(self.out_dim, self.out_dim)
+            
+#         self.gn3 = nn.GroupNorm(4, self.out_dim, affine=True)
+            
+#     def forward(self, x, injection_features, residual_feature):
+#         extracted_feats = []
+#         for i, inj_feat in enumerate(injection_features):
+#             extracted_feats.append(torch.mul(x, self.gate(inj_feat + x)))
+        
+#         out = self.fuse(torch.stack(extracted_feats, dim=0).sum(dim=0)) + residual_feature
+# #         out = self.gn3(F.relu(out))
+#         out = F.relu(self.gn3(out))
+        
+#         return out
+    
 class DEQFusionBlock(nn.Module):
-    def __init__(self, num_out_dims, deq_expand=2, num_groups=1, dropout=0.0, wnorm=False):
+    def __init__(self, num_out_dims, deq_expand=2, num_groups=1, dropout=0.2, wnorm=False):
         """
         Purified-then-combined fusion block.
         """
@@ -71,16 +96,19 @@ class DEQFusionBlock(nn.Module):
         
         self.gate = nn.Linear(num_out_dims[0], self.out_dim)
         self.fuse = nn.Linear(self.out_dim, self.out_dim)
+        
+        self.dropout1 = nn.Dropout(p=dropout)
+        self.dropout2 = nn.Dropout(p=dropout)
             
         self.gn3 = nn.GroupNorm(4, self.out_dim, affine=True)
             
     def forward(self, x, injection_features, residual_feature):
         extracted_feats = []
         for i, inj_feat in enumerate(injection_features):
-            extracted_feats.append(torch.mul(x, self.gate(inj_feat + x)))
+            extracted_feats.append(torch.mul(x, self.dropout1(self.gate(inj_feat + x))))
         
-        out = self.fuse(torch.stack(extracted_feats, dim=0).sum(dim=0)) + residual_feature
-#         out = self.gn3(F.relu(out))
+        out = self.dropout2(self.fuse(torch.stack(extracted_feats, dim=0).sum(dim=0))) + residual_feature
+        # out = self.gn3(F.relu(out))
         out = F.relu(self.gn3(out))
         
         return out

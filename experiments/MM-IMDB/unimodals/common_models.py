@@ -7,8 +7,51 @@ from torch.nn import functional as F
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from torchvision import models as tmodels
 
+from pytorch_pretrained_bert.modeling import BertModel
 
 
+class BertEncoder(nn.Module):
+    def __init__(self, bert_type="bert-base-uncased"):
+        super(BertEncoder, self).__init__()
+        assert bert_type in ['bert-base-uncased', 'bert-large-uncased']
+        self.bert = BertModel.from_pretrained(bert_type)
+
+    def forward(self, input_ids, input_mask):
+        _, out = self.bert(
+            input_ids,
+            attention_mask=input_mask,
+            output_all_encoded_layers=False,
+        )
+        return out
+    
+
+class ResNet152(nn.Module):
+    def __init__(self, out_dim=2048, pool_type="avg", normalized=False):
+        super(ResNet152, self).__init__()
+        model = torchvision.models.resnet152(pretrained=True)
+        modules = list(model.children())[:-2]
+        self.model = nn.Sequential(*modules)
+
+        self.pool = (
+            nn.AdaptiveAvgPool2d((1, 1))
+            if pool_type == "avg"
+            else nn.AdaptiveMaxPool2d((1, 1))
+        )
+
+        self.emb_proj = nn.Linear(2048, out_dim) if out_dim != 2048 else None
+        self.normalized = normalized
+
+    def forward(self, x):
+        # Bx3x224x224 -> Bx2048x7x7 -> Bx2048
+        out = self.pool(self.model(x))
+        out = torch.flatten(out, start_dim=1)
+        if self.emb_proj is not None:
+            out = self.emb_proj(out)
+        # out = out.transpose(1, 2).contiguous()
+        if self.normalized:
+            out = F.normalize(out)
+        return out  # Bx2048
+    
 
 class Linear(torch.nn.Module):
     """Linear Layer with Xavier Initialization, and 0 Bias."""

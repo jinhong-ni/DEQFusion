@@ -15,7 +15,7 @@ softmax = nn.Softmax()
 class MMDL(nn.Module):
     """Implements MMDL classifier."""
     
-    def __init__(self, encoders, fusion, head, has_padding=False):
+    def __init__(self, encoders, fusion, head, has_padding=False, use_bert=False):
         """Instantiate MMDL Module
 
         Args:
@@ -31,6 +31,7 @@ class MMDL(nn.Module):
         self.has_padding = has_padding
         self.fuseout = None
         self.reps = []
+        self.use_bert = use_bert
 
     def forward(self, inputs):
         """Apply MMDL to Layer Input.
@@ -46,6 +47,10 @@ class MMDL(nn.Module):
             for i in range(len(inputs[0])):
                 outs.append(self.encoders[i](
                     [inputs[0][i], inputs[1][i]]))
+        elif self.use_bert:
+            outs.append(self.encoders[0](inputs[0], inputs[1]))
+            for i in range(1, len(self.encoders)):
+                outs.append(self.encoders[i](inputs[i+1]))
         else:
             for i in range(len(inputs)):
                 outs.append(self.encoders[i](inputs[i]))
@@ -93,7 +98,7 @@ def train(
         encoders, fusion, head, train_dataloader, valid_dataloader, total_epochs, additional_optimizing_modules=[], is_packed=False,
         early_stop=False, task="classification", optimtype=torch.optim.RMSprop, lr=0.001, weight_decay=0.0,
         objective=nn.CrossEntropyLoss(), auprc=False, save='best.pt', validtime=False, objective_args_dict=None, input_to_float=True, clip_val=8,
-        track_complexity=True):
+        track_complexity=True, use_bert=False, schedulertype=None, gradient_accumulation_steps=1, freeze_txt_epoch=None, freeze_img_epoch=None, lower_lr_for_fusion=False):
     """
     Handle running a simple supervised training loop.
     
@@ -118,20 +123,25 @@ def train(
     :param track_complexity: whether to track training complexity or not
     """
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    model = MMDL(encoders, fusion, head, has_padding=is_packed).to(device)
+    model = MMDL(encoders, fusion, head, has_padding=is_packed, use_bert=use_bert).to(device)
 
     def _trainprocess():
         additional_params = []
         for m in additional_optimizing_modules:
             additional_params.extend(
                 [p for p in m.parameters() if p.requires_grad])
-#         op = optimtype([p for p in model.parameters() if p.requires_grad] +
-#                        additional_params, lr=lr, weight_decay=weight_decay)
-        op = optimtype([
-                {'params': model.encoders.parameters()},
-                {'params': model.head.parameters()},
-                {'params': model.fuse.parameters(), 'lr': lr*0.1}
-            ], lr=lr, weight_decay=weight_decay)
+        op = optimtype([p for p in model.parameters() if p.requires_grad] +
+                       additional_params, lr=lr, weight_decay=weight_decay)
+        # total_steps = int(len(train_dataloader) / train_dataloader.batch_size / gradient_accumulation_steps) * total_epochs
+        # op = optimtype([p for p in model.parameters() if p.requires_grad] +
+        #                additional_params, lr=lr, warmup=0.1, t_total=total_steps)
+        if lower_lr_for_fusion:
+            op = optimtype([
+                    {'params': model.encoders.parameters()},
+                    {'params': model.head.parameters()},
+                    {'params': model.fuse.parameters(), 'lr': lr*0.1}
+                ], lr=lr, weight_decay=weight_decay)
+        scheduler = schedulertype(op, "max", patience=3, verbose=True, factor=0.5) if schedulertype is not None else None
 #         scheduler = torch.optim.lr_scheduler.StepLR(op, step_size=10, gamma=0.9)
         bestvalloss = 10000
         bestacc = 0
@@ -149,14 +159,30 @@ def train(
             total_jac_loss = 0.0
             totals = 0
             model.train()
-            for j in train_dataloader:
-                op.zero_grad()
+
+            freeze_img = epoch < freeze_img_epoch if freeze_img_epoch is not None else False
+            freeze_txt = epoch < freeze_txt_epoch if freeze_txt_epoch is not None else False
+
+            # if freeze_img:
+            #     print("Freezing image encoder.")
+            # if freeze_txt:
+            #     print("Freezing text encoder.")
+
+            for param in model.encoders[1].parameters():
+                param.requires_grad = not freeze_img
+            for param in model.encoders[0].parameters():
+                param.requires_grad = not freeze_txt
+
+            for step, j in enumerate(train_dataloader):
+                # op.zero_grad()
                 if is_packed:
                     with torch.backends.cudnn.flags(enabled=False):
                         model.train()
                         out = model([[_processinput(i).to(device)
                                     for i in j[0]], j[1]])
-
+                elif use_bert:
+                    model.train()
+                    out = model([j[0].to(device), j[1].to(device)] + [_processinput(i).to(device) for i in j[2:-1]])
                 else:
                     model.train()
 #                     try:
@@ -181,13 +207,21 @@ def train(
 
                 totalloss += loss * len(j[-1])
                 totals += len(j[-1])
+
+                if gradient_accumulation_steps > 1:
+                    loss = loss / gradient_accumulation_steps
+
                 try:
                     loss.backward()
                 except:
                     print('\nSingularity detected during backward, proceeding to next batch.')
                     continue
-                torch.nn.utils.clip_grad_norm_(model.parameters(), clip_val)
-                op.step()
+                # torch.nn.utils.clip_grad_norm_(model.parameters(), clip_val)
+                # op.step()
+
+                if (step + 1) % gradient_accumulation_steps == 0:
+                    op.step()
+                    op.zero_grad()
             print('')
             print("Epoch "+str(epoch)+" train loss: "+str(totalloss/totals))
 #             scheduler.step()
@@ -205,6 +239,13 @@ def train(
                         model.eval()
                         out = model([[_processinput(i).to(device)
                                     for i in j[0]], j[1]])
+                    elif use_bert:
+                        model.eval()
+                        try:
+                            out = model([j[0].to(device), j[1].to(device)] + [_processinput(i).to(device) for i in j[2:-1]])
+                        except:
+                            print('\nSingularity detected during validation')
+                            continue
                     else:
                         model.eval()
                         try:
@@ -246,6 +287,8 @@ def train(
             print('')
             if task == "classification":
                 acc = accuracy(true, pred)
+                if scheduler is not None:
+                    scheduler.step(acc)
                 print("Epoch "+str(epoch)+" valid loss: "+str(valloss) +
                       " acc: "+str(acc))
                 if acc > bestacc:
@@ -258,6 +301,8 @@ def train(
             elif task == "multilabel":
                 f1_micro = f1_score(true, pred, average="micro")
                 f1_macro = f1_score(true, pred, average="macro")
+                if scheduler is not None:
+                    scheduler.step(f1_micro)
                 print("Epoch "+str(epoch)+" valid loss: "+str(valloss) +
                       " f1_micro: "+str(f1_micro)+" f1_macro: "+str(f1_macro))
                 if f1_macro > bestf1:
@@ -276,7 +321,7 @@ def train(
                     torch.save(model, save)
                 else:
                     patience += 1
-            if early_stop and patience > 7:
+            if early_stop and patience > 5:
                 break
             if auprc:
                 print("AUPRC: "+str(AUPRC(pts)))
@@ -290,9 +335,8 @@ def train(
         _trainprocess()
 
 
-def single_test(
-        model, test_dataloader, is_packed=False,
-        criterion=nn.CrossEntropyLoss(), task="classification", auprc=False, input_to_float=True):
+def single_test(model, test_dataloader, is_packed=False, 
+                criterion=nn.CrossEntropyLoss(), task="classification", auprc=False, input_to_float=True, use_bert=False):
     """Run single test for model.
 
     Args:
@@ -320,6 +364,10 @@ def single_test(
             if is_packed:
                 out = model([[_processinput(i).to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
                             for i in j[0]], j[1]])
+            elif use_bert:
+                out = model([j[0].to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu")), 
+                             j[1].to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))] + 
+                             [_processinput(i).to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu")) for i in j[2:-1]])
             else:
                 out = model([_processinput(i).float().to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
                             for i in j[:-1]])
@@ -410,8 +458,8 @@ def single_test(
 
 
 
-def test(
-        model, test_dataloaders_all, dataset='default', method_name='My method', is_packed=False, criterion=nn.CrossEntropyLoss(), task="classification", auprc=False, input_to_float=True, no_robust=True):
+def test(model, test_dataloaders_all, dataset='default', method_name='My method', is_packed=False, criterion=nn.CrossEntropyLoss(), 
+         task="classification", auprc=False, input_to_float=True, no_robust=True, use_bert=False):
     """
     Handle getting test results for a simple supervised training loop.
     
@@ -423,20 +471,20 @@ def test(
     if no_robust:
         def _testprocess():
             single_test(model, test_dataloaders_all, is_packed,
-                        criterion, task, auprc, input_to_float)
+                        criterion, task, auprc, input_to_float, use_bert)
         all_in_one_test(_testprocess, [model])
         return
 
     def _testprocess():
         single_test(model, test_dataloaders_all[list(test_dataloaders_all.keys())[
-                    0]][0], is_packed, criterion, task, auprc, input_to_float)
+                    0]][0], is_packed, criterion, task, auprc, input_to_float, use_bert)
     all_in_one_test(_testprocess, [model])
     for noisy_modality, test_dataloaders in test_dataloaders_all.items():
         print("Testing on noisy data ({})...".format(noisy_modality))
         robustness_curve = dict()
         for test_dataloader in tqdm(test_dataloaders):
             single_test_result = single_test(
-                model, test_dataloader, is_packed, criterion, task, auprc, input_to_float)
+                model, test_dataloader, is_packed, criterion, task, auprc, input_to_float, use_bert)
             for k, v in single_test_result.items():
                 curve = robustness_curve.get(k, [])
                 curve.append(v)

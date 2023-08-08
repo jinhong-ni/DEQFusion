@@ -19,8 +19,7 @@ from sklearn.metrics import confusion_matrix,accuracy_score
 from sklearn import metrics
 
 
-#单GPU
-os.environ["CUDA_VISIBLE_DEVICES"]="1"
+# os.environ["CUDA_VISIBLE_DEVICES"]="6"
 
 
 """BERT finetuning runner."""

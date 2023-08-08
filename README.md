@@ -3,7 +3,7 @@ PyTorch implementation of the paper: Deep Equilibrium Multimodal Fusion [[arXiv]
 
 ## Installation
 
-Please clone this repo and use the following command to setup the environment:
+Please clone this repo and use the following command to setup the environment, adjust the CUDA version according to your GPUs:
 
 ```bash
 conda create -n deqfusion python==3.8 pytorch==1.11.0 torchvision==0.12.0 torchaudio==0.11.0 cudatoolkit=10.2 -c pytorch
@@ -30,25 +30,29 @@ Please run `python main.py -h` for more details.
 
 The code is modified from [MultiBench](https://github.com/pliang279/MultiBench).
 
-Please first download MM-IMDB dataset from [here](https://archive.org/download/mmimdb/multimodal_imdb.hdf5) and place it under directory `experiments/MM-IMDB`.
+Please first download MM-IMDB dataset from [here](https://archive.org/download/mmimdb/multimodal_imdb.hdf5).
 
-There are several example scripts for running the experiments using different fusion strategies. To train a model with our DEQ fusion on MM-IMDB, please run:
+If using ResNet152, please also download raw MM-IMDB dataset from [here](https://www.kaggle.com/datasets/johnarevalo/raw-mmimdb).
+
+There are several example scripts for running the experiments using different fusion strategies. To train a model with our DEQ fusion on MM-IMDB, Specify `$FILE_PATH` as the path for `multimodal_imdb.hdf5` or raw data `mmimdb`, then run:
 
 ```bash
 cd experiments/MM-IMDB
-python examples/multimedia/mmimdb_deq.py
+python examples/multimedia/mmimdb_deq.py -p $FILE_PATH
 ```
 
 ### CMU-MOSI
 
 The code is modified from the [official implementation of Cross-Modal BERT](https://github.com/thuiar/Cross-Modal-BERT).
 
-First download the pre-trained BERT model from [Google Drive](https://drive.google.com/file/d/1dKSzsgXORN7WVaJJYvNzqFPCQbn-aJcb/view?usp=sharing), or from [Baidu Netdisk](https://pan.baidu.com/s/1G3VaV0kqwYkOEFNst2rfVw) with code `fuse`, or use the following command:
+First download the pre-trained BERT model from [Google Drive](https://drive.google.com/file/d/1dKSzsgXORN7WVaJJYvNzqFPCQbn-aJcb/view?usp=sharing), then use the following command:
 
 ```bash
 wget https://storage.googleapis.com/bert_models/2018_10_18/uncased_L-12_H-768_A-12.zip
 unzip uncased_L-12_H-768_A-12.zip
 ```
+
+Alternative, you may download both files from [Baidu Netdisk](https://pan.baidu.com/s/1G3VaV0kqwYkOEFNst2rfVw) with code `fuse`.
 
 Run the experiments by:
 

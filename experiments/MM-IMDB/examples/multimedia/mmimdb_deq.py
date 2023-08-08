@@ -10,10 +10,17 @@ from fusions.DEQ_fusion import DEQFusion
 from fusions.common_fusions import Concat
 from training_structures.Supervised_Learning import train, test
 
+import argparse
+
+parser = argparse.ArgumentParser(description='DEQ Feature Fusion')
+parser.add_argument('-p', '--dataset_path', required=True, type=str, help='Path to dataset')
+args = parser.parse_args()
+
 
 filename = "best_deq.pt"
 traindata, validdata, testdata = get_dataloader(
-    "/home/nijinhong1/deq/mmimdb/multimodal_imdb.hdf5", "../video/mmimdb", vgg=True, batch_size=256)
+    # "/home/nijinhong1/deq/mmimdb/multimodal_imdb.hdf5", "../video/mmimdb", vgg=True, batch_size=256)
+    os.path.join(args.dataset_path, 'multimodal_imdb.hdf5'), "../video/mmimdb", vgg=True, batch_size=256, metadata=os.path.join(args.dataset_path, 'metadata.npy'))
 
 encoders = [MaxOut_MLP(512, 512, 300, linear_layer=False),
             MaxOut_MLP(512, 1024, 4096, 512, False)]
@@ -26,7 +33,7 @@ fusion = DEQFusion(512, 2, 105, 106, 'abs').cuda()
 # fusion = Concat().cuda()
 
 train(encoders, fusion, head, traindata, validdata, 1000, early_stop=True, task="multilabel",
-      save=filename, optimtype=torch.optim.AdamW, lr=1e-3, weight_decay=1e-2, objective=torch.nn.BCEWithLogitsLoss())
+      save=filename, optimtype=torch.optim.AdamW, lr=1e-3, weight_decay=1e-2, objective=torch.nn.BCEWithLogitsLoss(), lower_lr_for_fusion=True)
 
 print("Testing:")
 model = torch.load(filename).cuda()

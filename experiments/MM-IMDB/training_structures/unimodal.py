@@ -10,7 +10,9 @@ from tqdm import tqdm
 softmax = nn.Softmax()
 
 
-def train(encoder, head, train_dataloader, valid_dataloader, total_epochs, early_stop=False, optimtype=torch.optim.RMSprop, lr=0.001, weight_decay=0.0, criterion=nn.CrossEntropyLoss(), auprc=False, save_encoder='encoder.pt', save_head='head.pt', modalnum=0, task='classification', track_complexity=True):
+def train(encoder, head, train_dataloader, valid_dataloader, total_epochs, early_stop=False, optimtype=torch.optim.RMSprop, lr=0.001, 
+          weight_decay=0.0, criterion=nn.CrossEntropyLoss(), auprc=False, save_encoder='encoder.pt', save_head='head.pt', modalnum=0, 
+          task='classification', track_complexity=True, use_bert=False, schedulertype=None, freeze_epoch=None):
     """Train unimodal module.
 
     Args:
@@ -32,8 +34,35 @@ def train(encoder, head, train_dataloader, valid_dataloader, total_epochs, early
         track_complexity (bool, optional): Whether to track the model's complexity or not. Defaults to True.
     """
     def _trainprocess():
-        model = nn.Sequential(encoder, head)
+        if use_bert:
+            class ModelWrapper(nn.Module):
+                def __init__(self, bert_enc, head):
+                    super(ModelWrapper, self).__init__()
+                    self.enc = bert_enc
+                    self.head = head
+
+                def forward(self, input_ids, input_mask):
+                    x = self.enc(
+                        input_ids, input_mask,
+                    )
+                    return self.head(x)
+            model = ModelWrapper(encoder, head)
+        else:
+            class ModelWrapper(nn.Module):
+                def __init__(self, enc, head):
+                    super(ModelWrapper, self).__init__()
+                    self.enc = enc
+                    self.head = head
+
+                def forward(self, x):
+                    x = self.enc(x)
+                    return self.head(x)
+            model = ModelWrapper(encoder, head)#nn.Sequential(encoder, head)
+            # print(model)
         op = optimtype(model.parameters(), lr=lr, weight_decay=weight_decay)
+        scheduler = schedulertype(
+            op, "max", patience=5, verbose=True, factor=0.5
+        ) if schedulertype is not None else None
         bestvalloss = 10000
         bestacc = 0
         bestf1 = 0
@@ -41,9 +70,25 @@ def train(encoder, head, train_dataloader, valid_dataloader, total_epochs, early
         for epoch in range(total_epochs):
             totalloss = 0.0
             totals = 0
-            for j in train_dataloader:
+
+            freeze = epoch < freeze_epoch if freeze_epoch is not None else False
+
+            # if freeze_img:
+            #     print("Freezing image encoder.")
+            # if freeze_txt:
+            #     print("Freezing text encoder.")
+
+            for param in model.enc.parameters():
+                param.requires_grad = not freeze
+
+            for ix, j in enumerate(train_dataloader):
+                # print(f'{ix} / {len(train_dataloader)}')
                 op.zero_grad()
-                out = model(j[modalnum].float().to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu")))
+                if use_bert:
+                    out = model(j[0].to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu")), 
+                                j[1].to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu")))
+                else:
+                    out = model(j[modalnum].float().to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu")))
                 
                 if type(criterion) == torch.nn.modules.loss.BCEWithLogitsLoss:
                     loss = criterion(out, j[-1].float().to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu")))
@@ -61,7 +106,12 @@ def train(encoder, head, train_dataloader, valid_dataloader, total_epochs, early
                 true = []
                 pts = []
                 for j in valid_dataloader:
-                    out = model(j[modalnum].float().to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu")))
+                    # out = model(j[modalnum].float().to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu")))
+                    if use_bert:
+                        out = model(j[0].to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu")), 
+                                    j[1].to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu")))
+                    else:
+                        out = model(j[modalnum].float().to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu")))
                     if type(criterion) == torch.nn.modules.loss.BCEWithLogitsLoss:
                         loss = criterion(out, j[-1].float().to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu")))
                     else:
@@ -84,6 +134,8 @@ def train(encoder, head, train_dataloader, valid_dataloader, total_epochs, early
             valloss = totalloss/totals
             if task == "classification":
                 acc = accuracy_score(true, pred)
+                if scheduler is not None:
+                    scheduler.step(acc)
                 print("Epoch "+str(epoch)+" valid loss: "+str(valloss) +
                       " acc: "+str(acc))
                 if acc > bestacc:
@@ -97,6 +149,8 @@ def train(encoder, head, train_dataloader, valid_dataloader, total_epochs, early
             elif task == "multilabel":
                 f1_micro = f1_score(true, pred, average="micro")
                 f1_macro = f1_score(true, pred, average="macro")
+                if scheduler is not None:
+                    scheduler.step(f1_micro)
                 print("Epoch "+str(epoch)+" valid loss: "+str(valloss) +
                       " f1_micro: "+str(f1_micro)+" f1_macro: "+str(f1_macro))
                 if f1_macro > bestf1:
@@ -127,7 +181,7 @@ def train(encoder, head, train_dataloader, valid_dataloader, total_epochs, early
         _trainprocess()
 
 
-def single_test(encoder, head, test_dataloader, auprc=False, modalnum=0, task='classification', criterion=None):
+def single_test(encoder, head, test_dataloader, auprc=False, modalnum=0, task='classification', criterion=None, use_bert=False):
     """Test unimodal model on one dataloader.
 
     Args:
@@ -142,14 +196,34 @@ def single_test(encoder, head, test_dataloader, auprc=False, modalnum=0, task='c
     Returns:
         dict: Dictionary of (metric, value) relations.
     """
-    model = nn.Sequential(encoder, head)
+    # model = nn.Sequential(encoder, head)
+    if use_bert:
+        class ModelWrapper(nn.Module):
+            def __init__(self, bert_enc, head):
+                super(ModelWrapper, self).__init__()
+                self.enc = bert_enc
+                self.head = head
+
+            def forward(self, input_ids, input_mask):
+                x = self.enc(
+                    input_ids, input_mask,
+                )
+                return self.head(x)
+        model = ModelWrapper(encoder, head)
+    else:
+        model = nn.Sequential(encoder, head)
     with torch.no_grad():
         pred = []
         true = []
         totalloss = 0
         pts = []
         for j in test_dataloader:
-            out = model(j[modalnum].float().to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu")))
+            if use_bert:
+                out = model(j[0].to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu")), 
+                            j[1].to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu")))
+            else:
+                out = model(j[modalnum].float().to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu")))
+            # out = model(j[modalnum].float().to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu")))
             if criterion is not None:
                 loss = criterion(out, j[-1].to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu")))
                 totalloss += loss*len(j[-1])
@@ -199,7 +273,8 @@ def single_test(encoder, head, test_dataloader, auprc=False, modalnum=0, task='c
             return {'MSE': (totalloss / totals).item()}
 
 
-def test(encoder, head, test_dataloaders_all, dataset='default', method_name='My method', auprc=False, modalnum=0, task='classification', criterion=None, no_robust=True):
+def test(encoder, head, test_dataloaders_all, dataset='default', method_name='My method', auprc=False, modalnum=0, task='classification', 
+         criterion=None, no_robust=True, use_bert=False):
     """Test unimodal model on all provided dataloaders.
 
     Args:
@@ -217,7 +292,7 @@ def test(encoder, head, test_dataloaders_all, dataset='default', method_name='My
     if no_robust:
         def _testprocess():
             single_test(encoder, head, test_dataloaders_all,
-                        auprc, modalnum, task, criterion)
+                        auprc, modalnum, task, criterion, use_bert)
         all_in_one_test(_testprocess, [encoder, head])
         return
 
