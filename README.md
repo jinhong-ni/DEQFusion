@@ -34,11 +34,18 @@ Please first download MM-IMDB dataset from [here](https://archive.org/download/m
 
 If using ResNet152, please also download raw MM-IMDB dataset from [here](https://www.kaggle.com/datasets/johnarevalo/raw-mmimdb).
 
-There are several example scripts for running the experiments using different fusion strategies. To train a model with our DEQ fusion on MM-IMDB, Specify `$FILE_PATH` as the path for `multimodal_imdb.hdf5` or raw data `mmimdb`, then run:
+There are several example scripts for running the experiments using different fusion strategies. To train a model with our DEQ fusion on MM-IMDB with default settings (Word2vec+VGGNet), Specify `$FILE_PATH` as the path for `multimodal_imdb.hdf5`, then run:
 
 ```bash
 cd experiments/MM-IMDB
 python examples/multimedia/mmimdb_deq.py -p $FILE_PATH
+```
+
+Alternatively, you can train a model with our DEQ fusion with BERT+ResNet152. First, please specify `$FILE_PATH` as the path of raw data directory `mmimdb` then run the following command:
+
+```bash
+cd experiments/MM-IMDB
+python examples/multimedia/mmimdb_deq_bert_resnet152.py -p $FILE_PATH
 ```
 
 ### CMU-MOSI
@@ -52,7 +59,7 @@ wget https://storage.googleapis.com/bert_models/2018_10_18/uncased_L-12_H-768_A-
 unzip uncased_L-12_H-768_A-12.zip
 ```
 
-Alternative, you may download both files from [Baidu Netdisk](https://pan.baidu.com/s/1G3VaV0kqwYkOEFNst2rfVw) with code `fuse`.
+Alternatively, you may download both files from [Baidu Netdisk](https://pan.baidu.com/s/1G3VaV0kqwYkOEFNst2rfVw) with code `fuse`.
 
 Run the experiments by:
 
